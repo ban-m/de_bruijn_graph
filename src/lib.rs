@@ -751,13 +751,7 @@ mod tests {
             } else {
                 w.iter().rev().copied().collect()
             };
-            let (edges, occ, cluster) = (vec![], 0, 0);
-            Node {
-                kmer,
-                edges,
-                occ,
-                cluster,
-            }
+            Node::new(kmer)
         }
     }
     impl IntoDeBruijnNodes for Vec<(u64, u64)> {
