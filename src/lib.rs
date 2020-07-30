@@ -24,7 +24,7 @@ pub struct Node {
     pub occ: usize,
     pub edges: Vec<Edge>,
     kmer: Vec<(u64, u64)>,
-    pub cluster: usize,
+    pub cluster: Option<usize>,
 }
 
 impl Node {
@@ -44,7 +44,7 @@ impl Node {
             kmer: kmer.to_vec(),
             edges: vec![],
             occ: 0,
-            cluster: 0,
+            cluster: None,
         }
     }
 }
@@ -61,10 +61,14 @@ impl std::fmt::Debug for Node {
             .iter()
             .map(|(u, c)| format!("{}-{}", u, c))
             .collect();
+        let cluster = self
+            .cluster
+            .map(|x| format!("{}", x))
+            .unwrap_or_else(|| format!("-"));
         write!(
             f,
             "{}\t{}\t{}\t[{}]",
-            self.cluster,
+            cluster,
             self.occ,
             edges.join(","),
             kmer.join(",")
@@ -190,12 +194,14 @@ impl DeBruijnGraph {
         let mut count = HashMap::<_, u32>::new();
         for node in read.into_de_bruijn_nodes(self.k) {
             if let Some(&idx) = self.indexer.get(&node) {
-                *count.entry(self.nodes[idx].cluster).or_default() += 1;
+                if let Some(cl) = self.nodes[idx].cluster {
+                    *count.entry(cl).or_default() += 1;
+                }
             }
         }
         count.into_iter().max_by_key(|x| x.1).map(|x| x.0)
     }
-    pub fn coloring(&mut self) {
+    pub fn coloring(&mut self)->usize {
         // Coloring node of the de Bruijn graph.
         // As a first try, I just color de Bruijn graph by its connected components.
         let mut fu = FindUnion::new(self.nodes.len());
@@ -204,7 +210,7 @@ impl DeBruijnGraph {
                 fu.unite(from, edge.to);
             }
         }
-        let mut current_component = 1;
+        let mut current_component = 0;
         debug!("ClusterID\tNumberOfKmer");
         let mut ignored = 0;
         for cluster in 0..self.nodes.len() {
@@ -221,12 +227,13 @@ impl DeBruijnGraph {
             debug!("{}\t{}", current_component, count);
             for (idx, node) in self.nodes.iter_mut().enumerate() {
                 if fu.find(idx).unwrap() == cluster {
-                    node.cluster = current_component;
+                    node.cluster = Some(current_component);
                 }
             }
             current_component += 1;
         }
         debug!("Ignored small component (<10 kmer):{}", ignored);
+        current_component
     }
     #[allow(dead_code)]
     pub fn clustering(&self, thr: usize) -> Vec<HashSet<(u64, u64)>> {
