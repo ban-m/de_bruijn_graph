@@ -28,7 +28,7 @@ pub struct Node {
 }
 
 impl Node {
-    pub fn push(&mut self, to: usize) {
+    fn push(&mut self, to: usize) {
         match self.edges.iter_mut().find(|e| e.to == to) {
             Some(x) => {
                 x.weight += 1;
@@ -185,9 +185,13 @@ impl DeBruijnGraph {
             .iter_mut()
             .filter(|node| node.edges.len() > 2)
             .for_each(|node| {
-                // Remove weak edges.
                 node.edges.retain(|edge| edge.weight > thr);
             });
+        // Removing weak node
+        let sum: usize = self.nodes.iter().map(|n| n.occ).sum();
+        let thr = sum / self.nodes.len() / 4;
+        let to_be_removed: Vec<_> = self.nodes.iter().map(|n| n.occ < thr).collect();
+        self.remove_nodes(&to_be_removed);
         self
     }
     pub fn assign_read<T: IntoDeBruijnNodes>(&self, read: &T) -> Option<usize> {
@@ -201,7 +205,7 @@ impl DeBruijnGraph {
         }
         count.into_iter().max_by_key(|x| x.1).map(|x| x.0)
     }
-    pub fn coloring(&mut self)->usize {
+    pub fn coloring(&mut self) -> usize {
         // Coloring node of the de Bruijn graph.
         // As a first try, I just color de Bruijn graph by its connected components.
         let mut fu = FindUnion::new(self.nodes.len());
