@@ -64,7 +64,7 @@ impl std::fmt::Debug for Node {
         let cluster = self
             .cluster
             .map(|x| format!("{}", x))
-            .unwrap_or_else(|| format!("-"));
+            .unwrap_or_else(|| "-".to_string());
         write!(
             f,
             "{}\t{}\t{}\t[{}]",
