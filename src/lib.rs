@@ -27,6 +27,28 @@ pub struct Node {
     pub cluster: usize,
 }
 
+impl Node {
+    pub fn push(&mut self, to: usize) {
+        match self.edges.iter_mut().find(|e| e.to == to) {
+            Some(x) => {
+                x.weight += 1;
+            }
+            None => self.edges.push(Edge { to, weight: 1 }),
+        }
+    }
+    fn remove_edge(&mut self, to: usize) {
+        self.edges.retain(|x| x.to != to);
+    }
+    pub fn new(kmer: Vec<(u64, u64)>) -> Self {
+        Node {
+            kmer: kmer.to_vec(),
+            edges: vec![],
+            occ: 0,
+            cluster: 0,
+        }
+    }
+}
+
 impl std::fmt::Debug for Node {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let edges: Vec<_> = self
@@ -52,20 +74,6 @@ impl std::fmt::Debug for Node {
 
 pub trait AsDeBruijnNode: std::marker::Sized {
     fn as_node(w: &[Self]) -> Node;
-}
-
-impl Node {
-    pub fn push(&mut self, to: usize) {
-        match self.edges.iter_mut().find(|e| e.to == to) {
-            Some(x) => {
-                x.weight += 1;
-            }
-            None => self.edges.push(Edge { to, weight: 1 }),
-        }
-    }
-    fn remove_edge(&mut self, to: usize) {
-        self.edges.retain(|x| x.to != to);
-    }
 }
 
 #[derive(Debug, Clone)]
