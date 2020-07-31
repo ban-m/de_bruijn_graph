@@ -83,7 +83,7 @@ pub trait AsDeBruijnNode: std::marker::Sized {
 #[derive(Debug, Clone)]
 pub struct Edge {
     to: usize,
-    weight: u64,
+    pub weight: u64,
 }
 
 use std::hash::Hasher;
@@ -175,23 +175,10 @@ impl DeBruijnGraph {
         self.clean_up(thr)
     }
     fn clean_up(mut self, thr: u64) -> Self {
-        // Removing weak and non-solo edge.
-        // This is because, solo-edge would be true edge
-        // Even if the weight is small.
-        // It is not a problem to leave consective false-edge ,
-        // as such a cluster would be removed by filtering
-        // clusters by their sizes.
-        self.nodes
-            .iter_mut()
-            .filter(|node| node.edges.len() > 2)
-            .for_each(|node| {
-                node.edges.retain(|edge| edge.weight > thr);
-            });
+        self.nodes.iter_mut().for_each(|node| {
+            node.edges.retain(|edge| edge.weight > thr);
+        });
         // Removing weak node
-        let sum: usize = self.nodes.iter().map(|n| n.occ).sum();
-        let thr = sum / self.nodes.len() / 4;
-        let to_be_removed: Vec<_> = self.nodes.iter().map(|n| n.occ < thr).collect();
-        self.remove_nodes(&to_be_removed);
         self
     }
     pub fn assign_read<T: IntoDeBruijnNodes>(&self, read: &T) -> Option<usize> {
