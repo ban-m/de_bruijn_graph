@@ -491,20 +491,20 @@ impl DeBruijnGraph {
                 index += !b as usize;
             }
         }
-        eprint!("{}->", self.indexer.len());
+        // eprint!("{}->", self.indexer.len());
         self.indexer.retain(|_, x| {
             let old_idx = *x;
             *x = next_index[*x];
             !to_be_removed[old_idx]
         });
-        eprintln!("{}", self.indexer.len());
-        eprint!("{}->", self.nodes.len());
+        // eprintln!("{}", self.indexer.len());
+        // eprint!("{}->", self.nodes.len());
         let mut index = 0;
         self.nodes.retain(|_| {
             index += 1;
             !to_be_removed[index - 1]
         });
-        eprintln!("{}", self.nodes.len());
+        // eprintln!("{}", self.nodes.len());
         self.nodes.iter_mut().for_each(|n| {
             n.edges.iter_mut().for_each(|x| x.to = next_index[x.to]);
         });
@@ -551,7 +551,7 @@ impl DeBruijnGraph {
             if self.nodes[idx].edges.len() < 4 {
                 continue;
             }
-            eprintln!("{}", idx);
+            // eprintln!("{}", idx);
             let merged_nodes = match self.resolve_crossing(idx, reads) {
                 Some(res) => res,
                 None => continue,
@@ -576,7 +576,7 @@ impl DeBruijnGraph {
                 queue.push_front(contract);
             }
         }
-        eprintln!("{:?}", to_be_removed);
+        // eprintln!("{:?}", to_be_removed);
         self.remove_nodes(&to_be_removed);
     }
     fn resolve_crossing<T: IntoDeBruijnNodes>(
@@ -611,7 +611,7 @@ impl DeBruijnGraph {
             }
         }
         let edges: Vec<_> = counts.into_iter().map(|((x, y), z)| (x, y, z)).collect();
-        eprintln!("Edges:{:?}", edges);
+        // eprintln!("Edges:{:?}", edges);
         let (_, used_edges) = maximum_weight_matching(&edges, neighbors.len());
         if used_edges.len() <= 1 {
             return None;
