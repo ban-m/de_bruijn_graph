@@ -181,6 +181,38 @@ impl DeBruijnGraph {
         // Removing weak node
         self
     }
+    pub fn assign_read_by_unit<T: IntoDeBruijnNodes>(&self, read: &T) -> Option<usize> {
+        let c = *self
+            .nodes
+            .iter()
+            .filter_map(|e| e.cluster.as_ref())
+            .max()
+            .unwrap_or(&0)
+            + 1;
+        let colors = {
+            let mut counts: Vec<_> = std::iter::repeat_with(HashSet::new).take(c).collect();
+            for node in self.nodes.iter() {
+                if let Some(cl) = node.cluster {
+                    for &kmer in node.kmer.iter() {
+                        counts[cl].insert(kmer);
+                    }
+                }
+            }
+            counts
+        };
+        let mut count = vec![0; c];
+        for node in read.into_de_bruijn_nodes(1) {
+            let kmer = &node.kmer[0];
+            for (idx, _) in colors.iter().enumerate().filter(|x| x.1.contains(kmer)) {
+                count[idx] += 1;
+            }
+        }
+        count
+            .into_iter()
+            .enumerate()
+            .max_by_key(|x| x.1)
+            .map(|x| x.0)
+    }
     pub fn assign_read<T: IntoDeBruijnNodes>(&self, read: &T) -> Option<usize> {
         let mut count = HashMap::<_, u32>::new();
         for node in read.into_de_bruijn_nodes(self.k) {
