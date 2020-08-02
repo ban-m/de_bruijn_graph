@@ -321,7 +321,6 @@ impl DeBruijnGraph {
                 None => continue,
             };
             // search nearest bubble.
-            // eprintln!("{:?}", bubble);
             let pair_pos = match self.search_nearest_bubble(bubble.root, bubble.shoot, &bubble_spec)
             {
                 Ok(res) => res,
@@ -346,127 +345,241 @@ impl DeBruijnGraph {
                 }
                 Err(ReachedNodeType::ComplexNode) => continue,
             };
-            // Never panic.
             let pair = bubble_spec[pair_pos].unwrap();
-            // Resolve node.
             bubble_spec[idx] = None;
             bubble_spec[pair_pos] = None;
-            let resolved_pairs = self.resolve_bubble(reads, bubble, pair);
-            // First, remove all the edges from branches to the root.
-            for bbl in &[pair, bubble] {
-                let ((b0, b1), shoot) = (bbl.branches, bbl.shoot);
-                self.nodes[b0].remove_edge(shoot);
-                self.nodes[b1].remove_edge(shoot);
-                self.nodes[shoot].remove_edge(b0);
-                self.nodes[shoot].remove_edge(b1);
-            }
-            // Then, connect anchored pairs.
-            for &(n0, n1) in resolved_pairs.iter() {
-                self.nodes[n0].push(n1);
-                self.nodes[n1].push(n0);
-            }
-            // Then, remove bubbles if the node is branch-free.
-            for &(n0, n1) in resolved_pairs.iter() {
-                if self.nodes[n0].edges.len() <= 2 {
-                    bubble_spec[n0] = None;
-                }
-                if self.nodes[n1].edges.len() <= 2 {
-                    bubble_spec[n1] = None;
-                }
-            }
-            // Then, check bubbles at anchored positions,
-            for &(n0, n1) in resolved_pairs.iter() {
-                if let Some(b) = bubble_spec.get_mut(n0).unwrap().as_mut() {
-                    if b.branches.0 == bubble.shoot || b.branches.0 == pair.shoot {
-                        b.branches.0 = n1;
-                    } else if b.branches.1 == bubble.shoot || b.branches.1 == pair.shoot {
-                        b.branches.1 = n1;
-                    } else if b.root == bubble.shoot || b.root == pair.shoot {
-                        b.root = n1;
-                    }
-                }
-                if let Some(b) = bubble_spec.get_mut(n1).unwrap().as_mut() {
-                    if b.branches.0 == bubble.shoot || b.branches.0 == pair.shoot {
-                        b.branches.0 = n0;
-                    } else if b.branches.1 == bubble.shoot || b.branches.1 == pair.shoot {
-                        b.branches.1 = n0;
-                    } else if b.root == bubble.shoot || b.root == pair.shoot {
-                        b.root = n0;
+            eprintln!("{:?}\t{:?}", bubble, pair);
+            eprintln!("{:?}", self);
+            // contract into bubble.shoot.
+            {
+                let mut child = vec![];
+                self.nodes[pair.branches.0]
+                    .edges
+                    .iter_mut()
+                    .filter(|e| e.to == pair.shoot)
+                    .for_each(|e| {
+                        child.push((pair.branches.0, e.weight));
+                        e.to = bubble.shoot
+                    });
+                self.nodes[pair.branches.1]
+                    .edges
+                    .iter_mut()
+                    .filter(|e| e.to == pair.shoot)
+                    .for_each(|e| {
+                        child.push((pair.branches.1, e.weight));
+                        e.to = bubble.shoot;
+                    });
+                for (to, w) in child {
+                    let edges = &mut self.nodes[bubble.shoot].edges;
+                    match edges.iter_mut().find(|e| e.to == to) {
+                        Some(x) => {
+                            x.weight += w;
+                        }
+                        None => edges.push(Edge { to, weight: w }),
                     }
                 }
             }
-            // Lastly, register all the nodes between two shoots as `removed`
+            // Register all the nodes between two shoots as `removed`
             let (mut prev, mut current) = (bubble.shoot, bubble.root);
             while current != pair.shoot {
                 to_be_removed[current] = true;
                 let next_nodes = &self.nodes[current].edges;
                 assert!(next_nodes.len() == 2);
                 let next = next_nodes.iter().find(|e| e.to != prev).unwrap().to;
+                self.nodes[current].edges.clear();
                 prev = current;
                 current = next;
             }
-            to_be_removed[bubble.shoot] = true;
+            self.nodes[pair.shoot].edges.clear();
+            self.nodes[bubble.shoot].remove_edge(bubble.root);
             to_be_removed[pair.shoot] = true;
+            // solve crossing.
+            let merged_nodes = match self.resolve_crossing(bubble.shoot, reads) {
+                Some(res) => res,
+                None => continue,
+            };
+            // Success.
+            to_be_removed[bubble.shoot] = true;
+            let children: Vec<_> = self.nodes[bubble.shoot]
+                .edges
+                .iter()
+                .map(|e| e.to)
+                .collect();
+            for child in children {
+                self.nodes[child].remove_edge(bubble.shoot);
+            }
+            self.nodes[bubble.shoot].edges.clear();
+            for (contract, members) in merged_nodes {
+                for member in members {
+                    self.nodes[member].push(contract);
+                    self.nodes[contract].push(member);
+                }
+            }
         }
+        eprintln!("{:?}", to_be_removed);
         // Removing nodes.
         self.remove_nodes(&to_be_removed);
     }
-    fn resolve_bubble<T: IntoDeBruijnNodes>(
-        &self,
-        reads: &[T],
-        bubble0: Bubble,
-        bubble1: Bubble,
-    ) -> Vec<(usize, usize)> {
-        // eprintln!("Resolving {:?} {:?}", bubble0, bubble1);
-        // [00->10, 01->10, 00->11, 01->11];
-        let mut connection_counts = [0; 4];
-        // TODO:Need faster algorithm here.
-        for read in reads.iter().map(|r| r.into_de_bruijn_nodes(self.k)) {
-            let (mut b00, mut b01) = (false, false);
-            let (mut b10, mut b11) = (false, false);
-            for &node in read.iter().filter_map(|w| self.indexer.get(&w)) {
-                b00 |= node == bubble0.branches.0;
-                b01 |= node == bubble0.branches.1;
-                b10 |= node == bubble1.branches.0;
-                b11 |= node == bubble1.branches.1;
-            }
-            assert!(!b00 || !b01);
-            assert!(!b10 || !b11);
-            if (b00 || b01) && (b10 || b11) {
-                let b0 = if b00 { 0 } else { 1 };
-                let b1 = if b10 { 0 } else { 1 };
-                connection_counts[(b1 << 1) + b0] += 1;
-            }
-        }
-        // TODO: parametrize here.
-        connection_counts.iter_mut().for_each(|x| {
-            if *x <= 1 {
-                *x = 0;
-            }
-        });
-        // Case0: bubble0.0 -> bubble1.0 and bubble0.1 -> bubble1.1
-        let case0 = connection_counts[0] + connection_counts[3];
-        // Case1: bubble0.0 -> bubble1.1 and bubble0.0 -> bubble1.0
-        let case1 = connection_counts[1] + connection_counts[2];
-        let mut pairs = vec![];
-        // TODO: parametrize here.
-        if case0 > case1 {
-            if connection_counts[0] > 0 {
-                pairs.push((bubble0.branches.0, bubble1.branches.0));
-            }
-            if connection_counts[3] > 0 {
-                pairs.push((bubble0.branches.1, bubble1.branches.1));
-            }
-        } else {
-            if connection_counts[1] > 0 {
-                pairs.push((bubble0.branches.1, bubble1.branches.0));
-            }
-            if connection_counts[2] > 0 {
-                pairs.push((bubble0.branches.0, bubble1.branches.1));
-            }
-        }
-        pairs
-    }
+    // pub fn resolve_bubbles_1<T: IntoDeBruijnNodes>(&mut self, reads: &[T]) {
+    //     let mut bubble_spec = self.enumerate_bubbles(reads);
+    //     let mut queue_and_parent: std::collections::VecDeque<_> = bubble_spec
+    //         .iter()
+    //         .enumerate()
+    //         .filter_map(|(idx, e)| e.map(|_| (idx, idx)))
+    //         .collect();
+    //     let mut to_be_removed = vec![false; self.nodes.len()];
+    //     while let Some((idx, parent)) = queue_and_parent.pop_back() {
+    //         let bubble = match bubble_spec[idx] {
+    //             Some(x) => x,
+    //             None => continue,
+    //         };
+    //         // search nearest bubble.
+    //         // eprintln!("{:?}", bubble);
+    //         let pair_pos = match self.search_nearest_bubble(bubble.root, bubble.shoot, &bubble_spec)
+    //         {
+    //             Ok(res) => res,
+    //             Err(ReachedNodeType::Root) => {
+    //                 // We cut the bubble arbitrary.
+    //                 let branch = bubble.branches.0;
+    //                 self.nodes[branch].remove_edge(bubble.shoot);
+    //                 self.nodes[bubble.shoot].remove_edge(branch);
+    //                 continue;
+    //             }
+    //             Err(ReachedNodeType::BubbleBranch(p)) if parent == p => {
+    //                 // We reached the same parent again.
+    //                 // I think this bubble could not be resolved. Just abandon.
+    //                 continue;
+    //             }
+    //             Err(ReachedNodeType::BubbleBranch(p)) => {
+    //                 // We reached a branch of a bubble. However, thre is
+    //                 // some progress.
+    //                 // Hope we can resolve this bubble in the next time.
+    //                 queue_and_parent.push_front((idx, p));
+    //                 continue;
+    //             }
+    //             Err(ReachedNodeType::ComplexNode) => continue,
+    //         };
+    //         // Never panic.
+    //         let pair = bubble_spec[pair_pos].unwrap();
+    //         // Resolve node.
+    //         bubble_spec[idx] = None;
+    //         bubble_spec[pair_pos] = None;
+    //         let resolved_pairs = self.resolve_bubble(reads, bubble, pair);
+    //         // First, remove all the edges from branches to the root.
+    //         for bbl in &[pair, bubble] {
+    //             let ((b0, b1), shoot) = (bbl.branches, bbl.shoot);
+    //             self.nodes[b0].remove_edge(shoot);
+    //             self.nodes[b1].remove_edge(shoot);
+    //             self.nodes[shoot].remove_edge(b0);
+    //             self.nodes[shoot].remove_edge(b1);
+    //         }
+    //         // Then, connect anchored pairs.
+    //         for &(n0, n1) in resolved_pairs.iter() {
+    //             self.nodes[n0].push(n1);
+    //             self.nodes[n1].push(n0);
+    //         }
+    //         // Then, remove bubbles if the node is branch-free.
+    //         for &(n0, n1) in resolved_pairs.iter() {
+    //             if self.nodes[n0].edges.len() <= 2 {
+    //                 bubble_spec[n0] = None;
+    //             }
+    //             if self.nodes[n1].edges.len() <= 2 {
+    //                 bubble_spec[n1] = None;
+    //             }
+    //         }
+    //         // Then, check bubbles at anchored positions,
+    //         for &(n0, n1) in resolved_pairs.iter() {
+    //             if let Some(b) = bubble_spec.get_mut(n0).unwrap().as_mut() {
+    //                 if b.branches.0 == bubble.shoot || b.branches.0 == pair.shoot {
+    //                     b.branches.0 = n1;
+    //                 } else if b.branches.1 == bubble.shoot || b.branches.1 == pair.shoot {
+    //                     b.branches.1 = n1;
+    //                 } else if b.root == bubble.shoot || b.root == pair.shoot {
+    //                     b.root = n1;
+    //                 }
+    //             }
+    //             if let Some(b) = bubble_spec.get_mut(n1).unwrap().as_mut() {
+    //                 if b.branches.0 == bubble.shoot || b.branches.0 == pair.shoot {
+    //                     b.branches.0 = n0;
+    //                 } else if b.branches.1 == bubble.shoot || b.branches.1 == pair.shoot {
+    //                     b.branches.1 = n0;
+    //                 } else if b.root == bubble.shoot || b.root == pair.shoot {
+    //                     b.root = n0;
+    //                 }
+    //             }
+    //         }
+    //         // Lastly, register all the nodes between two shoots as `removed`
+    //         let (mut prev, mut current) = (bubble.shoot, bubble.root);
+    //         while current != pair.shoot {
+    //             to_be_removed[current] = true;
+    //             let next_nodes = &self.nodes[current].edges;
+    //             assert!(next_nodes.len() == 2);
+    //             let next = next_nodes.iter().find(|e| e.to != prev).unwrap().to;
+    //             prev = current;
+    //             current = next;
+    //         }
+    //         to_be_removed[bubble.shoot] = true;
+    //         to_be_removed[pair.shoot] = true;
+    //     }
+    //     // Removing nodes.
+    //     self.remove_nodes(&to_be_removed);
+    // }
+    // fn resolve_bubble<T: IntoDeBruijnNodes>(
+    //     &self,
+    //     reads: &[T],
+    //     bubble0: Bubble,
+    //     bubble1: Bubble,
+    // ) -> Vec<(usize, usize)> {
+    //     // eprintln!("Resolving {:?} {:?}", bubble0, bubble1);
+    //     // [00->10, 01->10, 00->11, 01->11];
+    //     let mut connection_counts = [0; 4];
+    //     // TODO:Need faster algorithm here.
+    //     for read in reads.iter().map(|r| r.into_de_bruijn_nodes(self.k)) {
+    //         let (mut b00, mut b01) = (false, false);
+    //         let (mut b10, mut b11) = (false, false);
+    //         for &node in read.iter().filter_map(|w| self.indexer.get(&w)) {
+    //             b00 |= node == bubble0.branches.0;
+    //             b01 |= node == bubble0.branches.1;
+    //             b10 |= node == bubble1.branches.0;
+    //             b11 |= node == bubble1.branches.1;
+    //         }
+    //         assert!(!b00 || !b01);
+    //         assert!(!b10 || !b11);
+    //         if (b00 || b01) && (b10 || b11) {
+    //             let b0 = if b00 { 0 } else { 1 };
+    //             let b1 = if b10 { 0 } else { 1 };
+    //             connection_counts[(b1 << 1) + b0] += 1;
+    //         }
+    //     }
+    //     // TODO: parametrize here.
+    //     connection_counts.iter_mut().for_each(|x| {
+    //         if *x <= 1 {
+    //             *x = 0;
+    //         }
+    //     });
+    //     // Case0: bubble0.0 -> bubble1.0 and bubble0.1 -> bubble1.1
+    //     let case0 = connection_counts[0] + connection_counts[3];
+    //     // Case1: bubble0.0 -> bubble1.1 and bubble0.0 -> bubble1.0
+    //     let case1 = connection_counts[1] + connection_counts[2];
+    //     let mut pairs = vec![];
+    //     // TODO: parametrize here.
+    //     if case0 > case1 {
+    //         if connection_counts[0] > 0 {
+    //             pairs.push((bubble0.branches.0, bubble1.branches.0));
+    //         }
+    //         if connection_counts[3] > 0 {
+    //             pairs.push((bubble0.branches.1, bubble1.branches.1));
+    //         }
+    //     } else {
+    //         if connection_counts[1] > 0 {
+    //             pairs.push((bubble0.branches.1, bubble1.branches.0));
+    //         }
+    //         if connection_counts[2] > 0 {
+    //             pairs.push((bubble0.branches.0, bubble1.branches.1));
+    //         }
+    //     }
+    //     pairs
+    // }
     fn enumerate_bubbles<T: IntoDeBruijnNodes>(&self, reads: &[T]) -> Vec<Option<Bubble>> {
         // Enumerate bubble.
         let mut edge_counts: Vec<_> = (0..self.nodes.len()).map(|idx| vec![0; idx]).collect();
@@ -581,14 +694,10 @@ impl DeBruijnGraph {
             if self.nodes[idx].edges.len() < 4 {
                 continue;
             }
-            // eprintln!("{}", idx);
             let merged_nodes = match self.resolve_crossing(idx, reads) {
                 Some(res) => res,
                 None => continue,
             };
-            // for &(contract, ref children) in merged_nodes.iter() {
-            //     eprintln!("{:?}->{}", children, contract);
-            // }
             // Success resolving.
             {
                 let children: Vec<_> = self.nodes[idx].edges.iter().map(|e| e.to).collect();
@@ -610,7 +719,7 @@ impl DeBruijnGraph {
         self.remove_nodes(&to_be_removed);
     }
     fn resolve_crossing<T: IntoDeBruijnNodes>(
-        &mut self,
+        &self,
         center: usize,
         reads: &[T],
     ) -> Option<Vec<(usize, Vec<usize>)>> {
@@ -621,9 +730,6 @@ impl DeBruijnGraph {
             .enumerate()
             .map(|(idx, orig)| (orig, idx))
             .collect();
-        // eprintln!("Resolving {}", center);
-        // eprintln!("Mapping:{:?}", neighbors);
-        // Construct the graph
         let mut counts: HashMap<(usize, usize), u32> = HashMap::new();
         for read in reads.iter() {
             let mut occs = vec![false; neighbors.len()];
@@ -641,7 +747,6 @@ impl DeBruijnGraph {
             }
         }
         let edges: Vec<_> = counts.into_iter().map(|((x, y), z)| (x, y, z)).collect();
-        // eprintln!("Edges:{:?}", edges);
         let (_, used_edges) = maximum_weight_matching(&edges, neighbors.len());
         if used_edges.len() <= 1 {
             return None;
