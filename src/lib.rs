@@ -176,9 +176,9 @@ impl DeBruijnGraph {
             .iter()
             .flat_map(|n| n.edges.iter().map(|e| e.weight))
             .collect();
-        let (med, mad) = median_and_mad(&edges).unwrap();
-        debug!("MED:MAD={}:{}", med, mad);
-        med - 5 * mad
+        let (med, _) = median_and_mad(&edges).unwrap();
+        debug!("MED:THR={}:{}", med, med / 5);
+        med / 5
     }
     pub fn clean_up_auto(self) -> Self {
         let thr = self.calc_thr();
