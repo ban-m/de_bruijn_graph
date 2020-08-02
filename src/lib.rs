@@ -160,6 +160,7 @@ impl DeBruijnGraph {
         }
         Self { k, nodes, indexer }
     }
+    #[allow(dead_code)]
     fn calc_thr_edge(&self) -> u64 {
         let counts = self
             .nodes
@@ -169,8 +170,18 @@ impl DeBruijnGraph {
         let len: usize = self.nodes.iter().map(|n| n.edges.len()).sum::<usize>();
         counts / len as u64 / 3
     }
+    fn calc_thr(&self) -> u64 {
+        let edges: Vec<_> = self
+            .nodes
+            .iter()
+            .flat_map(|n| n.edges.iter().map(|e| e.weight))
+            .collect();
+        let (med, mad) = median_and_mad(&edges).unwrap();
+        debug!("MED:MAD={}:{}", med, mad);
+        med - 5 * mad
+    }
     pub fn clean_up_auto(self) -> Self {
-        let thr = self.calc_thr_edge();
+        let thr = self.calc_thr();
         debug!("Removing edges with weight less than {}", thr);
         self.clean_up(thr)
     }
@@ -689,6 +700,44 @@ impl DeBruijnGraph {
                 })
                 .collect(),
         )
+    }
+}
+
+// return the median and the median of the absolute error.
+fn median_and_mad(xs: &[u64]) -> Option<(u64, u64)> {
+    let median = select_nth_by(xs, xs.len() / 2, |&x| x)?;
+    let mad = select_nth_by(xs, xs.len() / 2, |&x| {
+        if x > median {
+            x - median
+        } else {
+            median - x
+        }
+    })?;
+    Some((median, mad))
+}
+
+use std::cmp::{PartialEq, PartialOrd};
+fn select_nth_by<T: Clone, F: Fn(&T) -> K, K>(xs: &[T], n: usize, f: F) -> Option<K>
+where
+    K: PartialOrd + PartialEq,
+{
+    if xs.len() <= n {
+        return None;
+    }
+    let pivot = f(&xs[xs.len() / 2]);
+    let small = xs.iter().filter(|x| f(x) < pivot).count();
+    let same = xs.iter().filter(|x| f(x) == pivot).count();
+    // Recursive call.
+    if n < small {
+        // We can remove elements more than `pivot` from `xs`.
+        let xs: Vec<_> = xs.iter().filter(|x| f(&x) < pivot).cloned().collect();
+        select_nth_by(&xs, n, f)
+    } else if small + same <= n {
+        let xs: Vec<_> = xs.iter().filter(|x| f(&x) > pivot).cloned().collect();
+        select_nth_by(&xs, n - small - same, f)
+    } else {
+        assert!(small <= n && n < small + same);
+        Some(pivot)
     }
 }
 
