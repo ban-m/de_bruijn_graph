@@ -23,7 +23,7 @@ impl std::fmt::Debug for DeBruijnGraph {
 pub struct Node {
     pub occ: usize,
     pub edges: Vec<Edge>,
-    kmer: Vec<(u64, u64)>,
+    pub kmer: Vec<(u64, u64)>,
     pub cluster: Option<usize>,
 }
 
@@ -179,14 +179,73 @@ impl DeBruijnGraph {
     }
     #[allow(dead_code)]
     fn calc_thr(&self) -> u64 {
-        let edges: Vec<_> = self
-            .nodes
-            .iter()
-            .flat_map(|n| n.edges.iter().map(|e| e.weight))
-            .collect();
-        let (med, _) = median_and_mad(&edges).unwrap();
-        debug!("MED:THR={}:{}", med, med / 5);
-        (med / 4).max(3)
+        let mut counts: HashMap<Vec<u64>, usize> = HashMap::new();
+        for node in self.nodes.iter() {
+            let kmer: Vec<_> = node.kmer.iter().map(|n| n.0).collect();
+            *counts.entry(kmer).or_default() += node.occ;
+        }
+        // let counts: Vec<_> = counts.values().map(|&n| n as u64).collect();
+        let mut hist: HashMap<_, u32> = HashMap::new();
+        for count in counts.values() {
+            *hist.entry(*count).or_default() += 1;
+        }
+        let mut probe = 1;
+        while hist.contains_key(&probe) {
+            probe += 1;
+        }
+        3 * probe as u64
+    }
+    pub fn remove_isolated_nodes(&mut self) {
+        let to_be_removed: Vec<_> = self.nodes.iter().map(|e| e.edges.is_empty()).collect();
+        self.remove_nodes(&to_be_removed);
+    }
+    pub fn clean_up_tight(&mut self) {
+        let total = self.nodes.iter().map(|n| n.edges.len()).sum::<usize>();
+        let len = self.nodes.len();
+        for i in 0..len {
+            if self.nodes[i].edges.len() <= 2 {
+                continue;
+            }
+            self.clean_up_tight_at(i);
+        }
+        let after = self.nodes.iter().map(|n| n.edges.len()).sum::<usize>();
+        debug!("{}=>{}", total, after);
+    }
+    fn clean_up_tight_at(&mut self, i: usize) {
+        // Enumerate candidates.
+        let mut degree: HashMap<u64, u32> = HashMap::new();
+        let kmer = self.nodes[i].kmer.clone();
+        for edge in self.nodes[i].edges.iter() {
+            for &(pos, cl) in self.nodes[edge.to].kmer.iter() {
+                if !kmer.contains(&(pos, cl)) {
+                    *degree.entry(pos).or_default() += 1;
+                }
+            }
+        }
+        for (pos, _) in degree.into_iter().filter(|&(_, c)| c > 1) {
+            // Select edges towards pos.
+            let max = self.nodes[i]
+                .edges
+                .iter()
+                .filter(|e| self.nodes[e.to].kmer.iter().any(|x| x.0 == pos))
+                .map(|e| e.weight)
+                .max()
+                .unwrap();
+            let removed: Vec<usize> = self.nodes[i]
+                .edges
+                .iter()
+                .filter(|w| {
+                    let has_pos = self.nodes[w.to].kmer.iter().any(|x| x.0 == pos);
+                    let heavy = w.weight > max / 2;
+                    has_pos && !heavy
+                })
+                .map(|e| e.to)
+                .collect();
+            for r in removed {
+                self.nodes[i].remove_edge(r);
+                self.nodes[r].remove_edge(i);
+            }
+        }
     }
     pub fn clean_up_auto(self) -> Self {
         let thr = self.calc_thr();
@@ -216,34 +275,27 @@ impl DeBruijnGraph {
         self
     }
     pub fn assign_read_by_unit<T: IntoDeBruijnNodes>(&self, read: &T) -> Option<usize> {
-        let c = *self
-            .nodes
-            .iter()
-            .filter_map(|e| e.cluster.as_ref())
-            .max()
-            .unwrap_or(&0)
-            + 1;
-        let colors = {
-            let mut counts: Vec<_> = std::iter::repeat_with(HashSet::new).take(c).collect();
-            for node in self.nodes.iter() {
-                if let Some(cl) = node.cluster {
-                    for &kmer in node.kmer.iter() {
-                        counts[cl].insert(kmer);
-                    }
+        let max_cluster = self.nodes.iter().flat_map(|n| n.cluster).max().unwrap_or(0);
+        let mut units_in_cluster: Vec<HashSet<_>> = vec![HashSet::new(); max_cluster + 1];
+        for node in self.nodes.iter() {
+            if let Some(cl) = node.cluster {
+                for tuple in node.kmer.iter() {
+                    units_in_cluster[cl as usize].insert(tuple.clone());
                 }
             }
-            counts
-        };
-        let mut count = vec![0; c];
-        for node in read.into_de_bruijn_nodes(1) {
-            let kmer = &node.kmer[0];
-            for (idx, _) in colors.iter().enumerate().filter(|x| x.1.contains(kmer)) {
-                count[idx] += 1;
-            }
         }
-        count
-            .into_iter()
+        units_in_cluster
+            .iter()
             .enumerate()
+            .map(|(idx, set)| {
+                let count = read
+                    .into_de_bruijn_nodes(1)
+                    .iter()
+                    .filter(|node| set.contains(&node.kmer[0]))
+                    .count();
+                (idx, count)
+            })
+            .filter(|x| x.1 > 0)
             .max_by_key(|x| x.1)
             .map(|x| x.0)
     }
@@ -258,7 +310,96 @@ impl DeBruijnGraph {
         }
         count.into_iter().max_by_key(|x| x.1).map(|x| x.0)
     }
-    pub fn coloring(&mut self) -> usize {
+    pub fn coloring_nodes_by<T: IntoDeBruijnNodes>(&mut self, read: &T, cluster: usize) {
+        for node in read.into_de_bruijn_nodes(self.k) {
+            if let Some(&idx) = self.indexer.get(&node) {
+                self.nodes[idx].cluster = Some(cluster);
+            }
+        }
+    }
+    pub fn expand_color<T: IntoDeBruijnNodes>(
+        &mut self,
+        reads: &[T],
+        thr: usize,
+        labels: &[Option<u8>],
+        background: Option<u8>,
+    ) -> HashMap<u8, u8> {
+        debug!("{:?}", background);
+        let mut current_cluster =
+            labels.iter().cloned().filter_map(|x| x).max().unwrap_or(0) as usize + 1;
+        let mut fu = FindUnion::new(self.nodes.len());
+        for (from, node) in self.nodes.iter().enumerate().filter(|x| x.1.occ > 0) {
+            for edge in node.edges.iter().filter(|e| e.weight > 0) {
+                fu.unite(from, edge.to);
+            }
+        }
+        let mut map = HashMap::new();
+        debug!("ClusterID\tNumberOfKmer");
+        let mut ignored = 0;
+        for cluster in 0..self.nodes.len() {
+            if fu.find(cluster).unwrap() != cluster {
+                continue;
+            }
+            let count = (0..self.nodes.len())
+                .filter(|&x| fu.find(x).unwrap() == cluster)
+                .count();
+            if count < thr {
+                ignored += 1;
+                continue;
+            }
+            let mut counts: HashMap<_, u32> = HashMap::new();
+            for (read, l) in reads.iter().zip(labels.iter()).filter(|(_, l)| l.is_some()) {
+                let label = l.unwrap();
+                let (total, contained) =
+                    read.into_de_bruijn_nodes(self.k)
+                        .iter()
+                        .fold((0, 0), |(total, cont), node| {
+                            let is_in_cluster = match self.indexer.get(&node) {
+                                Some(&idx) => (fu.find(idx).unwrap() == cluster) as u32,
+                                None => 0,
+                            };
+                            (total + 1, cont + is_in_cluster)
+                        });
+                if (total / 2) < contained {
+                    *counts.entry(label).or_default() += 1;
+                }
+            }
+            let merged_clusters: Vec<_> = counts
+                .iter()
+                .filter(|&(_, &count)| count > 10)
+                .map(|c| c.0)
+                .collect();
+            let assignment = match merged_clusters.iter().min() {
+                Some(&&res) => res as usize,
+                None if background.is_some() => background.unwrap() as usize,
+                None => {
+                    current_cluster += 1;
+                    current_cluster - 1
+                }
+            };
+            for (idx, node) in self.nodes.iter_mut().enumerate() {
+                if fu.find(idx).unwrap() == cluster {
+                    node.cluster = Some(assignment);
+                }
+            }
+            for &x in merged_clusters {
+                map.insert(x, assignment as u8);
+            }
+            debug!("{}\t{}", assignment, count);
+        }
+        debug!("Ignored small component (<{} kmer):{}", thr, ignored);
+        {
+            let mut res: HashMap<_, u32> = HashMap::new();
+            for node in self.nodes.iter() {
+                if let Some(cl) = node.cluster {
+                    *res.entry(cl).or_default() += 1;
+                }
+            }
+            debug!("Cluster:{:?}", res);
+        }
+        map
+    }
+    pub fn coloring(&mut self, thr: usize) -> usize {
         // Coloring node of the de Bruijn graph.
         // As a first try, I just color de Bruijn graph by its connected components.
         let mut fu = FindUnion::new(self.nodes.len());
@@ -277,7 +418,7 @@ impl DeBruijnGraph {
             let count = (0..self.nodes.len())
                 .filter(|&x| fu.find(x).unwrap() == cluster)
                 .count();
-            if count < 10 {
+            if count < thr {
                 ignored += 1;
                 continue;
             }
@@ -289,7 +430,16 @@ impl DeBruijnGraph {
             }
             current_component += 1;
         }
-        debug!("Ignored small component (<10 kmer):{}", ignored);
+        debug!("Ignored small component (<{} kmer):{}", thr, ignored);
+        {
+            let mut res: HashMap<_, u32> = HashMap::new();
+            for node in self.nodes.iter() {
+                if let Some(cl) = node.cluster {
+                    *res.entry(cl).or_default() += 1;
+                }
+            }
+            debug!("Cluster:{:?}", res);
+        }
         current_component
     }
     #[allow(dead_code)]
@@ -667,6 +817,7 @@ impl DeBruijnGraph {
     }
 }
 
+#[allow(dead_code)]
 // return the median and the median of the absolute error.
 fn median_and_mad(xs: &[u64]) -> Option<(u64, u64)> {
     let median = select_nth_by(xs, xs.len() / 2, |&x| x)?;
@@ -681,6 +832,7 @@ fn median_and_mad(xs: &[u64]) -> Option<(u64, u64)> {
 }
 
 use std::cmp::{PartialEq, PartialOrd};
+#[allow(dead_code)]
 fn select_nth_by<T: Clone, F: Fn(&T) -> K, K>(xs: &[T], n: usize, f: F) -> Option<K>
 where
     K: PartialOrd + PartialEq,
