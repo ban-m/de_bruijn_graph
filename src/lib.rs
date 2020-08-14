@@ -184,7 +184,6 @@ impl DeBruijnGraph {
             let kmer: Vec<_> = node.kmer.iter().map(|n| n.0).collect();
             *counts.entry(kmer).or_default() += node.occ;
         }
-        // let counts: Vec<_> = counts.values().map(|&n| n as u64).collect();
         let mut hist: HashMap<_, u32> = HashMap::new();
         for count in counts.values() {
             *hist.entry(*count).or_default() += 1;
@@ -193,6 +192,7 @@ impl DeBruijnGraph {
         while hist.contains_key(&probe) {
             probe += 1;
         }
+        // Changed.
         3 * probe as u64
     }
     pub fn remove_isolated_nodes(&mut self) {
@@ -247,12 +247,12 @@ impl DeBruijnGraph {
             }
         }
     }
-    pub fn clean_up_auto(self) -> Self {
+    pub fn clean_up_auto(&mut self) {
         let thr = self.calc_thr();
         debug!("Removing edges with weight less than {}", thr);
         self.clean_up(thr)
     }
-    fn clean_up(mut self, thr: u64) -> Self {
+    pub fn clean_up(&mut self, thr: u64) {
         let mut removed_edge = vec![];
         self.nodes
             .iter_mut()
@@ -272,7 +272,6 @@ impl DeBruijnGraph {
             self.nodes[from].remove_edge(to);
         }
         self.validate();
-        self
     }
     pub fn assign_read_by_unit<T: IntoDeBruijnNodes>(&self, read: &T) -> Option<usize> {
         let max_cluster = self.nodes.iter().flat_map(|n| n.cluster).max().unwrap_or(0);
