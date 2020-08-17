@@ -321,6 +321,7 @@ impl DeBruijnGraph {
         reads: &[T],
         thr: usize,
         labels: &[Option<u8>],
+        forbs: &[&[u8]],
         background: Option<u8>,
     ) -> HashMap<u8, u8> {
         debug!("{:?}", background);
@@ -347,8 +348,8 @@ impl DeBruijnGraph {
                 continue;
             }
             let mut counts: HashMap<_, u32> = HashMap::new();
-            for (read, l) in reads.iter().zip(labels.iter()).filter(|(_, l)| l.is_some()) {
-                let label = l.unwrap();
+            let mut forbidden_cluster: HashMap<_, u32> = HashMap::new();
+            for (i, read) in reads.iter().enumerate() {
                 let (total, contained) =
                     read.into_de_bruijn_nodes(self.k)
                         .iter()
@@ -359,8 +360,13 @@ impl DeBruijnGraph {
                             };
                             (total + 1, cont + is_in_cluster)
                         });
-                if (total / 2) < contained {
-                    *counts.entry(label).or_default() += 1;
+                if total/3 < contained {
+                    if let Some(label) = labels[i] {
+                        *counts.entry(label).or_default() += 1;
+                    }
+                    for f in forbs[i].iter() {
+                        *forbidden_cluster.entry(f).or_default() += 1;
+                    }
                 }
             }
             let merged_clusters: Vec<_> = counts
@@ -381,10 +387,13 @@ impl DeBruijnGraph {
                     node.cluster = Some(assignment);
                 }
             }
-            for &x in merged_clusters {
+            for &&x in merged_clusters.iter() {
                 map.insert(x, assignment as u8);
             }
-            debug!("{}\t{}", assignment, count);
+            debug!(
+                "{}\t{}\t{:?}\t{:?}",
+                assignment, count, forbidden_cluster, merged_clusters
+            );
         }
         debug!("Ignored small component (<{} kmer):{}", thr, ignored);
         {
