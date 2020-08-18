@@ -258,8 +258,14 @@ impl DeBruijnGraph {
     pub fn num_of_cc(&self, min_edge_weight: u64, min_cluster_size: usize) -> usize {
         let mut fu = FindUnion::new(self.nodes.len());
         for (from, node) in self.nodes.iter().enumerate().filter(|x| x.1.occ > 0) {
-            for edge in node.edges.iter().filter(|e| e.weight > min_edge_weight) {
-                fu.unite(from, edge.to);
+            if nodes.edges.len() > 2 {
+                for edge in node.edges.iter().filter(|e| e.weight > min_edge_weight) {
+                    fu.unite(from, edge.to);
+                }
+            } else {
+                for edge in node.edges.iter() {
+                    fu.unite(from, edge.to);
+                }
             }
         }
         let mut current_component = 0;
