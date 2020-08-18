@@ -247,10 +247,34 @@ impl DeBruijnGraph {
             }
         }
     }
-    pub fn clean_up_auto(&mut self) {
-        let thr = self.calc_thr();
+    pub fn clean_up_auto(&mut self, min_cluster_size: usize) {
+        let mut thr = self.calc_thr();
+        while self.num_of_cc(thr, min_cluster_size) == 1 {
+            thr += 1;
+        }
         debug!("Removing edges with weight less than {}", thr);
-        self.clean_up(thr)
+        self.clean_up(thr);
+    }
+    pub fn num_of_cc(&self, min_edge_weight: u64, min_cluster_size: usize) -> usize {
+        let mut fu = FindUnion::new(self.nodes.len());
+        for (from, node) in self.nodes.iter().enumerate().filter(|x| x.1.occ > 0) {
+            for edge in node.edges.iter().filter(|e| e.weight > min_edge_weight) {
+                fu.unite(from, edge.to);
+            }
+        }
+        let mut current_component = 0;
+        for cluster in 0..self.nodes.len() {
+            if fu.find(cluster).unwrap() != cluster {
+                continue;
+            }
+            let count = (0..self.nodes.len())
+                .filter(|&x| fu.find(x).unwrap() == cluster)
+                .count();
+            if count >= min_cluster_size {
+                current_component += 1;
+            }
+        }
+        current_component
     }
     pub fn clean_up(&mut self, thr: u64) {
         let mut removed_edge = vec![];
