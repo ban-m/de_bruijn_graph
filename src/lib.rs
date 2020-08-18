@@ -249,8 +249,14 @@ impl DeBruijnGraph {
     }
     pub fn clean_up_auto(&mut self, min_cluster_size: usize) {
         let mut thr = self.calc_thr();
-        while self.num_of_cc(thr, min_cluster_size) == 1 {
-            thr += 1;
+        loop {
+            let mut test = self.clone();
+            test.clean_up(thr);
+            if test.coloring(min_cluster_size) == 1 {
+                thr += 1;
+            } else {
+                break;
+            }
         }
         debug!("Removing edges with weight less than {}", thr);
         self.clean_up(thr);
@@ -258,7 +264,7 @@ impl DeBruijnGraph {
     pub fn num_of_cc(&self, min_edge_weight: u64, min_cluster_size: usize) -> usize {
         let mut fu = FindUnion::new(self.nodes.len());
         for (from, node) in self.nodes.iter().enumerate().filter(|x| x.1.occ > 0) {
-            if nodes.edges.len() > 2 {
+            if node.edges.len() > 2 {
                 for edge in node.edges.iter().filter(|e| e.weight > min_edge_weight) {
                     fu.unite(from, edge.to);
                 }
