@@ -193,7 +193,7 @@ impl DeBruijnGraph {
             probe += 1;
         }
         // Changed.
-        3 * probe as u64
+        3 * probe as u64 - 1
     }
     pub fn remove_isolated_nodes(&mut self) {
         let to_be_removed: Vec<_> = self.nodes.iter().map(|e| e.edges.is_empty()).collect();
@@ -360,7 +360,7 @@ impl DeBruijnGraph {
                             };
                             (total + 1, cont + is_in_cluster)
                         });
-                if total/3 < contained {
+                if total / 3 < contained {
                     if let Some(label) = labels[i] {
                         *counts.entry(label).or_default() += 1;
                     }
