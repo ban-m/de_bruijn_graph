@@ -184,7 +184,6 @@ impl DeBruijnGraph {
             let kmer: Vec<_> = node.kmer.iter().map(|n| n.0).collect();
             *counts.entry(kmer).or_default() += node.occ;
         }
-        // let counts: Vec<_> = counts.values().map(|&n| n as u64).collect();
         let mut hist: HashMap<_, u32> = HashMap::new();
         for count in counts.values() {
             *hist.entry(*count).or_default() += 1;
@@ -193,7 +192,7 @@ impl DeBruijnGraph {
         while hist.contains_key(&probe) {
             probe += 1;
         }
-        3 * probe as u64
+        probe as u64
     }
     pub fn remove_isolated_nodes(&mut self) {
         let to_be_removed: Vec<_> = self.nodes.iter().map(|e| e.edges.is_empty()).collect();
@@ -247,17 +246,20 @@ impl DeBruijnGraph {
             }
         }
     }
-    pub fn clean_up_auto(self) -> Self {
-        let thr = self.calc_thr();
-        debug!("Removing edges with weight less than {}", thr);
+    pub fn clean_up_auto(&mut self) {
+        let thr = 1;
+        //let thr = self.calc_thr();
+        //debug!("Removing edges with weight less than {}", thr);
+        // let to_be_removed: Vec<_> = self.nodes.iter().map(|n| n.occ <= thr).collect();
+        //self.remove_nodes(&to_be_removed);
         self.clean_up(thr)
     }
-    fn clean_up(mut self, thr: u64) -> Self {
+    pub fn clean_up(&mut self, thr: u64) {
         let mut removed_edge = vec![];
         self.nodes
             .iter_mut()
             .enumerate()
-            .filter(|(_, n)| n.edges.len() > 2)
+            // .filter(|(_, n)| n.edges.len() > 2)
             .for_each(|(idx, node)| {
                 node.edges.retain(|edge| {
                     if edge.weight > thr {
@@ -272,7 +274,6 @@ impl DeBruijnGraph {
             self.nodes[from].remove_edge(to);
         }
         self.validate();
-        self
     }
     pub fn assign_read_by_unit<T: IntoDeBruijnNodes>(&self, read: &T) -> Option<usize> {
         let max_cluster = self.nodes.iter().flat_map(|n| n.cluster).max().unwrap_or(0);
@@ -280,7 +281,7 @@ impl DeBruijnGraph {
         for node in self.nodes.iter() {
             if let Some(cl) = node.cluster {
                 for tuple in node.kmer.iter() {
-                    units_in_cluster[cl as usize].insert(tuple.clone());
+                    units_in_cluster[cl as usize].insert(*tuple);
                 }
             }
         }
@@ -643,20 +644,16 @@ impl DeBruijnGraph {
                 index += !b as usize;
             }
         }
-        // eprint!("{}->", self.indexer.len());
         self.indexer.retain(|_, x| {
             let old_idx = *x;
             *x = next_index[*x];
             !to_be_removed[old_idx]
         });
-        // eprintln!("{}", self.indexer.len());
-        // eprint!("{}->", self.nodes.len());
         let mut index = 0;
         self.nodes.retain(|_| {
             index += 1;
             !to_be_removed[index - 1]
         });
-        // eprintln!("{}", self.nodes.len());
         self.nodes.iter_mut().for_each(|n| {
             n.edges.iter_mut().for_each(|x| x.to = next_index[x.to]);
         });
@@ -1113,7 +1110,8 @@ mod tests {
             vec![(0, 1), (1, 1), (2, 0), (3, 1), (4, 1), (5, 1)],
             vec![(5, 1), (4, 1), (3, 1), (2, 0), (1, 1), (0, 1)],
         ];
-        let graph = DeBruijnGraph::from(&reads, 3).clean_up(1);
+        let mut graph = DeBruijnGraph::from(&reads, 3);
+        graph.clean_up(1);
         assert_eq!(graph.clustering(0).len(), 2, "\n{:?}", graph);
         let reads: Vec<Vec<(u64, u64)>> = vec![
             vec![(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0)],
@@ -1131,8 +1129,8 @@ mod tests {
             vec![(0, 1), (1, 1), (2, 0), (3, 0), (4, 0), (5, 1)],
             vec![(5, 1), (4, 0), (3, 0), (2, 0), (1, 1), (0, 1)],
         ];
-        let graph = DeBruijnGraph::from(&reads, 3);
-        let graph = graph.clean_up(1);
+        let mut graph = DeBruijnGraph::from(&reads, 3);
+        graph.clean_up(1);
         assert_eq!(graph.clustering(0).len(), 2, "\n{:?}", graph);
     }
     #[test]
@@ -1150,9 +1148,9 @@ mod tests {
             unit_len: 500,
         };
         let (reads, answer) = gen_dataset(&mut rng, conf);
-        let graph = DeBruijnGraph::from(&reads, 3);
-        let graph = graph.clean_up_auto();
-        eprintln!("{:?}", graph);
+        let mut graph = DeBruijnGraph::from(&reads, 3);
+        graph.clean_up(3);
+        // eprintln!("{:?}", graph);
         let mut components = graph.clustering(1);
         components.retain(|c| c.len() > 100);
         assert_eq!(components.len(), 2);
@@ -1195,8 +1193,8 @@ mod tests {
             unit_len: 800,
         };
         let (reads, answer) = gen_dataset(&mut rng, conf);
-        let graph = DeBruijnGraph::from(&reads, 3);
-        let graph = graph.clean_up_auto();
+        let mut graph = DeBruijnGraph::from(&reads, 3);
+        graph.clean_up_auto();
         eprintln!("{:?}", graph);
         let mut components = graph.clustering(1);
         components.retain(|cl| cl.len() > 100);
@@ -1240,8 +1238,8 @@ mod tests {
             unit_len: 50,
         };
         let (reads, answer) = gen_dataset(&mut rng, conf);
-        let graph = DeBruijnGraph::from(&reads, 3);
-        let graph = graph.clean_up_auto();
+        let mut graph = DeBruijnGraph::from(&reads, 3);
+        graph.clean_up(3);
         eprintln!("{:?}", graph);
         let mut components = graph.clustering(0);
         components.retain(|c| c.len() > 20);
