@@ -259,7 +259,7 @@ impl DeBruijnGraph {
         self.nodes
             .iter_mut()
             .enumerate()
-            // .filter(|(_, n)| n.edges.len() > 2)
+            .filter(|(_, n)| n.edges.len() > 2)
             .for_each(|(idx, node)| {
                 node.edges.retain(|edge| {
                     if edge.weight > thr {
@@ -277,11 +277,11 @@ impl DeBruijnGraph {
     }
     pub fn assign_read_by_unit<T: IntoDeBruijnNodes>(&self, read: &T) -> Option<usize> {
         let max_cluster = self.nodes.iter().flat_map(|n| n.cluster).max().unwrap_or(0);
-        let mut units_in_cluster: Vec<HashSet<_>> = vec![HashSet::new(); max_cluster + 1];
+        let mut units_in_cluster: Vec<HashMap<_, _>> = vec![HashMap::new(); max_cluster + 1];
         for node in self.nodes.iter() {
             if let Some(cl) = node.cluster {
                 for tuple in node.kmer.iter() {
-                    units_in_cluster[cl as usize].insert(*tuple);
+                    units_in_cluster[cl as usize].insert(*tuple, node.occ);
                 }
             }
         }
@@ -292,8 +292,8 @@ impl DeBruijnGraph {
                 let count = read
                     .into_de_bruijn_nodes(1)
                     .iter()
-                    .filter(|node| set.contains(&node.kmer[0]))
-                    .count();
+                    .filter_map(|node| set.get(&node.kmer[0]))
+                    .sum::<usize>();
                 (idx, count)
             })
             .filter(|x| x.1 > 0)
@@ -301,15 +301,18 @@ impl DeBruijnGraph {
             .map(|x| x.0)
     }
     pub fn assign_read<T: IntoDeBruijnNodes>(&self, read: &T) -> Option<usize> {
-        let mut count = HashMap::<_, u32>::new();
+        let mut count = HashMap::<_, usize>::new();
         for node in read.into_de_bruijn_nodes(self.k) {
             if let Some(&idx) = self.indexer.get(&node) {
-                if let Some(cl) = self.nodes[idx].cluster {
-                    *count.entry(cl).or_default() += 1;
+                let node = &self.nodes[idx];
+                if let Some(cl) = node.cluster {
+                    *count.entry(cl).or_default() += node.occ;
                 }
             }
         }
-        count.into_iter().max_by_key(|x| x.1).map(|x| x.0)
+        let mut count: Vec<_> = count.into_iter().collect();
+        count.sort_by_key(|x| x.1);
+        count.pop().map(|x| x.0)
     }
     pub fn coloring_nodes_by<T: IntoDeBruijnNodes>(&mut self, read: &T, cluster: usize) {
         for node in read.into_de_bruijn_nodes(self.k) {
